@@ -524,11 +524,109 @@ window.onmessage = ev => {
       <div class="stat"><div class="stat-val">${msg.variables||0}</div><div class="stat-lbl">Variables</div></div>
       <div class="stat"><div class="stat-val">${msg.components||0}</div><div class="stat-lbl">Components</div></div>
       <div class="stat"><div class="stat-val">${msg.pages||0}</div><div class="stat-lbl">Pages</div></div>`;
+
+    // ── PR47: text-style auto-apply count ─────────────────────────────────
+    // PR46 added a post-build sweep that walks every TEXT node and applies
+    // a text style by key inferred from the node's fontSize/weight/family.
+    // Surfacing the count gives users (and future debuggers) a clear signal
+    // that text styles are actually being applied — pre-PR47 there was no
+    // UI feedback so users assumed it wasn't working even when it was.
+    if (msg.autoStylesApplied && msg.autoStylesApplied > 0) {
+      const styleWrap = document.createElement('div');
+      styleWrap.style.cssText = 'display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;background:#f0fdf4;border:1px solid #bbf7d0;margin-top:12px;';
+      styleWrap.innerHTML =
+        '<div style="font-size:18px">✓</div>' +
+        '<div>' +
+        '<div style="font-size:12px;font-weight:600;color:#0f172a">' + msg.autoStylesApplied +
+        ' text nodes bound to text styles</div>' +
+        '<div style="font-size:10px;color:#475569">Edit a style in Figma\'s Text Styles panel — components will update.</div>' +
+        '</div>';
+      $('done-stats').appendChild(styleWrap);
+    }
+
+    // ── PR47: platforms filter visibility ─────────────────────────────────
+    // User report after PR45: "I am still not able to see the web only
+    // filter if I am selecting web-react". The filter WAS working but had
+    // no UI surface — users couldn't tell what was filtered. Show the
+    // project's platforms explicitly so the filter is no longer invisible.
+    // The label also reassures users that the right filter ran.
+    if (msg.platforms && msg.platforms.length > 0) {
+      var platLabels = msg.platforms.map(function(p) {
+        switch (p) {
+          case 'WEB':              return 'Web';
+          case 'IOS':              return 'iOS';
+          case 'ANDROID':          return 'Android';
+          case 'REACT_NATIVE':     return 'React Native';
+          case 'FLUTTER':          return 'Flutter';
+          case 'SWIFT_UI':         return 'SwiftUI';
+          case 'JETPACK_COMPOSE':  return 'Jetpack Compose';
+          default:                 return p;
+        }
+      });
+      var platWrap = document.createElement('div');
+      platWrap.style.cssText = 'display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;background:#eef2ff;border:1px solid #c7d2fe;margin-top:8px;';
+      platWrap.innerHTML =
+        '<div style="font-size:18px">🎯</div>' +
+        '<div>' +
+        '<div style="font-size:12px;font-weight:600;color:#3730a3">Filtered for ' + platLabels.join(', ') + '</div>' +
+        '<div style="font-size:10px;color:#4338ca">' + (msg.components || 0) + ' components match these platforms.</div>' +
+        '</div>';
+      $('done-stats').appendChild(platWrap);
+    }
+
+    // ── PR50: viewport bindings badge ─────────────────────────────────────
+    // The Viewport variable collection (PR49) creates 4 modes; PR50 binds
+    // canonical layout components to viewport/width / gutter / gap so they
+    // reflow when the user toggles the mode. Surface the count of bound
+    // components so users can verify the wiring worked.
+    if (msg.viewportBindingsApplied && msg.viewportBindingsApplied > 0) {
+      var vpWrap = document.createElement('div');
+      vpWrap.style.cssText = 'display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;background:#fdf4ff;border:1px solid #e9d5ff;margin-top:8px;';
+      vpWrap.innerHTML =
+        '<div style="font-size:18px">📐</div>' +
+        '<div>' +
+        '<div style="font-size:12px;font-weight:600;color:#581c87">' + msg.viewportBindingsApplied +
+        ' layout component' + (msg.viewportBindingsApplied === 1 ? '' : 's') + ' bound to Viewport modes</div>' +
+        '<div style="font-size:10px;color:#7e22ce">Toggle Mobile S / Mobile L / Desktop / Large in the Viewport collection to reflow.</div>' +
+        '</div>';
+      $('done-stats').appendChild(vpWrap);
+    }
+
     if (msg.healthScore !== null && msg.healthScore !== undefined) {
       const scoreWrap = document.createElement('div');
       scoreWrap.style.cssText = 'display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;background:#f8fafc;border:1px solid #e2e8f0;margin-top:12px;';
       scoreWrap.innerHTML = '<div style="width:36px;height:36px;border-radius:50%;border:2.5px solid ' + scoreColor + ';display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:' + scoreColor + '">' + msg.healthScore + '</div><div><div style="font-size:12px;font-weight:600;color:#0f172a">Health score</div><div style="font-size:10px;color:#64748b">' + scoreLabel + '</div></div>';
       $('done-stats').appendChild(scoreWrap);
+    }
+
+    // ── PR42: binding-leak diagnostic ─────────────────────────────────────
+    // If any bindFill/bindStroke/bindTextFill calls fell through to raw hex
+    // during this build, show the count + the first 20 paths so the user
+    // (or whoever is debugging) sees exactly which tokens leaked. Zero is
+    // the happy case — no extra UI when everything bound cleanly.
+    if (msg.missingTokensCount && msg.missingTokensCount > 0) {
+      const leakWrap = document.createElement('div');
+      leakWrap.style.cssText = 'margin-top:12px;padding:12px;border-radius:8px;background:#fef3c7;border:1px solid #fcd34d;';
+      var preview = (msg.missingTokensPreview || []).map(function(p){
+        // Escape minimally for HTML
+        return p.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      }).join('<br>');
+      var moreText = msg.missingTokensCount > 20
+        ? '<br><span style="opacity:0.7">… and ' + (msg.missingTokensCount - 20) + ' more</span>'
+        : '';
+      leakWrap.innerHTML =
+        '<div style="font-size:12px;font-weight:600;color:#92400e;margin-bottom:6px">⚠ ' +
+        msg.missingTokensCount +
+        ' token path' + (msg.missingTokensCount === 1 ? '' : 's') +
+        ' fell back to raw hex</div>' +
+        '<div style="font-size:10px;color:#78350f;line-height:1.5;font-family:ui-monospace,Menlo,monospace">' +
+        preview + moreText +
+        '</div>' +
+        '<div style="font-size:10px;color:#78350f;margin-top:8px;line-height:1.4">' +
+        'These layers won\'t respond to mode/theme changes. ' +
+        'The full list is also in the Figma console (Plugins → Development → Open console).' +
+        '</div>';
+      $('done-stats').appendChild(leakWrap);
     }
   }
 
