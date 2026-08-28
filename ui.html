@@ -695,9 +695,16 @@ window.onmessage = ev => {
         bg = '#fffbeb'; bd = '#fde68a'; fg = '#92400e';
       } else if (d.specFailed && d.specFailed.length) {
         head = 'Spec render failed — fell back to the handler';
-        body = 'Affected: ' + d.specFailed.join(', ')
-             + '. Output is unchanged rather than broken, by design. Bundle: '
-             + (d.buildStamp || 'unknown') + '.';
+        //  The MESSAGE, not just the component. Without it the reader is told
+        //  something broke and left to guess what, which is barely better
+        //  than silence.
+        var reasons = (d.specErrors || []).map(function (e) {
+          return '<div style="margin-top:3px"><b>' + e.componentId + '</b>: ' + e.message
+               + (e.where ? '<div style="opacity:.75">' + e.where + '</div>' : '') + '</div>';
+        }).join('');
+        body = (reasons || 'Affected: ' + d.specFailed.join(', '))
+             + '<div style="margin-top:4px">Output is unchanged rather than broken, by design. Bundle: '
+             + (d.buildStamp || 'unknown') + '.</div>';
         bg = '#fef2f2'; bd = '#fecaca'; fg = '#991b1b';
       } else {
         //  Everything lined up and the interpreter STILL never ran. Reported
