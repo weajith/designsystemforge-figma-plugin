@@ -264,6 +264,7 @@ body{background:#fff;width:100%;min-height:580px;overflow-x:hidden;overflow-y:au
     <div class="card card-success">
       <div class="card-title">✓ Scan complete</div>
       <div class="card-text" id="scan-result-text"></div>
+      <div class="card-text" id="scan-drift-text" style="display:none; margin-top:6px;"></div>
     </div>
     <div class="card" id="scan-changes-preview" style="display:none">
       <div class="card-title" id="scan-changes-count"></div>
@@ -440,7 +441,20 @@ window.onmessage = ev => {
   //    'version-check' fires after the async API call completes ──────────
   if (msg.type === 'current-version') {
     const v = $('footer-version');
-    if (v) v.textContent = 'v' + (msg.version || '—');
+    //  Show the BUNDLE identity, not just the version date.
+    //  LATEST_PLUGIN_VERSION is date-granular, so a bundle rebuilt later the
+    //  same day reads as identical to one built that morning — and a stale
+    //  bundle therefore announces itself as current. The build stamp carries
+    //  the commit sha (and +local when the tree is dirty), so "am I running
+    //  the code that was just merged" becomes readable instead of assumed.
+    if (v) {
+      v.textContent = 'v' + (msg.version || '—');
+      if (msg.buildStamp) {
+        v.textContent += '  ·  ' + msg.buildStamp;
+        v.title = 'Plugin bundle build stamp — commit sha and build time. '
+                + 'Compare with the merge you are expecting to see.';
+      }
+    }
     return;
   }
   if (msg.type === 'version-check') {
@@ -599,6 +613,164 @@ window.onmessage = ev => {
       $('done-stats').appendChild(scoreWrap);
     }
 
+    // ── M4.1: identity stats ──────────────────────────────────────────────
+    // code.ts has posted these since M4.1 shipped, but nothing ever rendered
+    // them — the one number the exit criterion asks the user to confirm
+    // (variantsPreserved) was invisible. Regeneration gets the loud green
+    // badge; a first generation gets one quiet line so the badge's absence
+    // is meaningful.
+    if (msg.identity && (msg.identity.setsPreserved > 0 || msg.identity.setsCreated > 0)) {
+      var idn = msg.identity;
+      var idWrap = document.createElement('div');
+      if (idn.setsPreserved > 0) {
+        var idParts = [
+          idn.setsPreserved + ' set' + (idn.setsPreserved === 1 ? '' : 's') + ' preserved',
+          idn.variantsPreserved + ' variant' + (idn.variantsPreserved === 1 ? '' : 's') + ' preserved',
+        ];
+        if (idn.variantsAdded > 0)   idParts.push(idn.variantsAdded + ' added');
+        if (idn.variantsRemoved > 0) idParts.push(idn.variantsRemoved + ' removed');
+        if (idn.setsCreated > 0)     idParts.push(idn.setsCreated + ' new set' + (idn.setsCreated === 1 ? '' : 's'));
+        idWrap.style.cssText = 'display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;background:#f0fdf4;border:1px solid #bbf7d0;margin-top:8px;';
+        idWrap.innerHTML =
+          '<div style="font-size:18px">♻️</div>' +
+          '<div>' +
+          '<div style="font-size:12px;font-weight:600;color:#166534">Regeneration kept component identity</div>' +
+          '<div style="font-size:10px;color:#15803d">' + idParts.join(' · ') + '. Instances placed in other files stay attached.</div>' +
+          '</div>';
+      } else {
+        idWrap.style.cssText = 'padding:8px 12px;margin-top:8px;';
+        idWrap.innerHTML =
+          '<div style="font-size:10px;color:#64748b">' + idn.setsCreated +
+          ' component set' + (idn.setsCreated === 1 ? '' : 's') +
+          ' created — first generation, nothing to preserve yet.</div>';
+      }
+      $('done-stats').appendChild(idWrap);
+
+      //  M5.3: a "new set" during a REGENERATION is ambiguous — either a
+      //  genuinely new component, or an identity miss that just detached
+      //  every instance of it. The number alone cannot tell you which, so
+      //  name the components and let the reader judge.
+      if (idn.setsPreserved > 0 && idn.createdDetail && idn.createdDetail.length) {
+        var missWrap = document.createElement('div');
+        var lines = idn.createdDetail.map(function (d) {
+          var why = d.pageWasNew
+            ? 'its page did not exist before — expected for a new component'
+            : (d.orphanTagsOnPage && d.orphanTagsOnPage.length
+                ? 'page had untagged/mismatched sets: ' + d.orphanTagsOnPage.join(', ')
+                : 'no previous set found on an existing page — instances of this component detached');
+          return '<div style="margin-top:2px"><b>' + d.name + '</b> (' + d.componentId + ') — ' + why + '</div>';
+        }).join('');
+        missWrap.style.cssText = 'padding:8px 12px;margin-top:6px;border-radius:8px;background:#fffbeb;border:1px solid #fde68a;';
+        missWrap.innerHTML =
+          '<div style="font-size:11px;font-weight:600;color:#92400e">Rebuilt rather than preserved</div>' +
+          '<div style="font-size:10px;color:#a16207">' + lines + '</div>';
+        $('done-stats').appendChild(missWrap);
+      }
+    }
+
+    // ── M5.3: which delivery stage is live ────────────────────────────────
+    //  A spec reaches Figma only if the API is deployed (it puts `spec` in the
+    //  payload) AND this bundle is current (it has the interpreter). Two
+    //  separate deploys. When output looks unchanged, the useful question is
+    //  WHICH stage is behind — and that used to be a guess.
+    if (msg.delivery && msg.delivery.expected && msg.delivery.expected.length) {
+      var d = msg.delivery;
+      var box = document.createElement('div');
+      var head, body, bg, bd, fg;
+
+      if (d.specRendered && d.specRendered.length) {
+        head = 'Rendered from spec: ' + d.specRendered.join(', ');
+        body = 'The authored spec drove these components, not a hand-written handler.';
+        bg = '#f0fdf4'; bd = '#bbf7d0'; fg = '#166534';
+      } else if (!d.specsInPayload) {
+        head = 'API is behind — no specs in this payload';
+        body = 'This bundle can render from a spec, but the API sent none. The spec is '
+             + 'added server-side, so the API needs to finish deploying. Plugin bundle: '
+             + (d.buildStamp || 'unknown') + '.';
+        bg = '#fffbeb'; bd = '#fde68a'; fg = '#92400e';
+      } else if (!d.specRenderable || !d.specRenderable.length) {
+        head = 'Specs arrived but none are switched on yet';
+        body = d.specsInPayload + ' component(s) carried a spec; none is in this build\u2019s '
+             + 'render list. Expected: ' + d.expected.join(', ') + '.';
+        bg = '#fffbeb'; bd = '#fde68a'; fg = '#92400e';
+      } else if (d.specFailed && d.specFailed.length) {
+        head = 'Spec render failed — fell back to the handler';
+        body = 'Affected: ' + d.specFailed.join(', ')
+             + '. Output is unchanged rather than broken, by design. Bundle: '
+             + (d.buildStamp || 'unknown') + '.';
+        bg = '#fef2f2'; bd = '#fecaca'; fg = '#991b1b';
+      } else {
+        //  Everything lined up and the interpreter STILL never ran. Reported
+        //  as its own state because the first version of this panel called it
+        //  "render failed" and listed nothing as affected — which sent the
+        //  reader looking for a broken spec when the real cause was that the
+        //  dispatch never matched. An empty failure list is not a failure.
+        head = 'Spec never ran — the dispatch did not match';
+        body = 'The spec arrived and is switched on (' + d.expected.join(', ')
+             + ') but no component reached the interpreter, and nothing threw. '
+             + 'That points at an id mismatch between the spec catalogue and the '
+             + 'plugin\u2019s internal component ids, not at the spec itself. Bundle: '
+             + (d.buildStamp || 'unknown') + '.';
+        bg = '#fef2f2'; bd = '#fecaca'; fg = '#991b1b';
+      }
+
+      box.style.cssText = 'padding:8px 12px;margin-top:6px;border-radius:8px;background:'
+        + bg + ';border:1px solid ' + bd + ';';
+      box.innerHTML =
+        '<div style="font-size:11px;font-weight:600;color:' + fg + '">' + head + '</div>' +
+        '<div style="font-size:10px;color:' + fg + ';opacity:.85;margin-top:2px">' + body + '</div>';
+      $('done-stats').appendChild(box);
+    }
+
+    // ── M4.2 ride-along: drift observed at the start of this run ──────────
+    // Same posted-but-never-rendered gap as identity. One line, only when
+    // designer edits were actually detected.
+    if (msg.drift && msg.drift.modified > 0) {
+      var drWrap = document.createElement('div');
+      drWrap.style.cssText = 'display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;background:#fffbeb;border:1px solid #fde68a;margin-top:8px;';
+      drWrap.innerHTML =
+        '<div style="font-size:18px">✏️</div>' +
+        '<div>' +
+        '<div style="font-size:12px;font-weight:600;color:#92400e">' + msg.drift.modified +
+        ' component' + (msg.drift.modified === 1 ? '' : 's') + ' had designer edits before this run</div>' +
+        '<div style="font-size:10px;color:#b45309">Those edits were replaced by this regeneration. The drift report in the app has the details.</div>' +
+        '</div>';
+      $('done-stats').appendChild(drWrap);
+    }
+
+    // ── M5.0: set-level invariants ────────────────────────────────────────
+    // Amber detail when a set violates (state resizes the component, or a
+    // state renders identically to default); one quiet grey line when
+    // clean, so "the check ran and found nothing" is visible — a new
+    // check whose silence is indistinguishable from absence teaches
+    // nothing during calibration.
+    if (msg.setInvariant && msg.setInvariant.setsChecked > 0) {
+      var si = msg.setInvariant;
+      var siWrap = document.createElement('div');
+      if (si.violations > 0) {
+        var siLines = (si.entries || []).map(function(en){
+          var det = [].concat(en.sizeMismatches || [], en.identicalStates || [])
+            .slice(0, 4)
+            .map(function(d){ return d.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); })
+            .join('<br>');
+          return '<div style="margin-top:4px"><b>' + en.componentId + '</b><br>' + det + '</div>';
+        }).join('');
+        siWrap.style.cssText = 'margin-top:8px;padding:12px;border-radius:8px;background:#fffbeb;border:1px solid #fde68a;';
+        siWrap.innerHTML =
+          '<div style="font-size:12px;font-weight:600;color:#92400e">⚠ ' + si.violations +
+          ' component set' + (si.violations === 1 ? '' : 's') + ' violate' + (si.violations === 1 ? 's' : '') +
+          ' set invariants</div>' +
+          '<div style="font-size:10px;color:#78350f;line-height:1.5;font-family:ui-monospace,Menlo,monospace">' + siLines + '</div>' +
+          '<div style="font-size:10px;color:#b45309;margin-top:6px">A state must not resize its component, and every state must look different from default. Informational — nothing was blocked.</div>';
+      } else {
+        siWrap.style.cssText = 'padding:6px 12px;margin-top:6px;';
+        siWrap.innerHTML =
+          '<div style="font-size:10px;color:#64748b">Set invariants: ' + si.setsChecked +
+          ' set' + (si.setsChecked === 1 ? '' : 's') + ' checked, clean.</div>';
+      }
+      $('done-stats').appendChild(siWrap);
+    }
+
     // ── PR42: binding-leak diagnostic ─────────────────────────────────────
     // If any bindFill/bindStroke/bindTextFill calls fell through to raw hex
     // during this build, show the count + the first 20 paths so the user
@@ -648,6 +820,17 @@ window.onmessage = ev => {
 
   // ── Scan: complete ────────────────────────────────────────────────────────
   if (msg.type === 'scan-complete') {
+    if (msg.drift && msg.drift.scanned > 0) {
+      const d = msg.drift;
+      const el = document.getElementById('scan-drift-text');
+      if (el) {
+        el.textContent = d.modified > 0
+          ? '⚠ ' + d.modified + ' of ' + d.scanned + ' generated components were modified in Figma since the last generation — regenerating will rebuild them from the website. Details in the app.'
+          : '✓ No drift: all ' + d.scanned + ' generated components are untouched since the last generation.';
+        el.style.display = 'block';
+        el.style.color = d.modified > 0 ? '#B45309' : '#15803D';
+      }
+    }
     hide('scan-progress');
     show('scan-done');
     const n = msg.changes?.length || 0;
