@@ -751,8 +751,20 @@ window.onmessage = ev => {
     // clean, so "the check ran and found nothing" is visible — a new
     // check whose silence is indistinguishable from absence teaches
     // nothing during calibration.
-    if (msg.setInvariant && msg.setInvariant.setsChecked > 0) {
+    // `setsSkipped` is in the gate on purpose: a build where EVERY group
+    // was skipped has setsChecked === 0, and gating on that alone hid the
+    // whole block — so "nothing was examined" rendered exactly like "no
+    // build ran". CLAUDE.md §7.21.
+    if (msg.setInvariant && (msg.setInvariant.setsChecked > 0 || msg.setInvariant.setsSkipped > 0)) {
       var si = msg.setInvariant;
+      var siSkipped = si.groupsSkipped || 0;
+      var siSets = si.setsSkipped || 0;
+      // "M groups in K sets skipped (no default-state cell)"
+      var siSkipTxt = siSkipped > 0
+        ? siSkipped + ' group' + (siSkipped === 1 ? '' : 's') +
+          ' in ' + siSets + ' set' + (siSets === 1 ? '' : 's') +
+          ' skipped (no default-state cell)'
+        : '';
       var siWrap = document.createElement('div');
       if (si.violations > 0) {
         var siLines = (si.entries || []).map(function(en){
@@ -768,12 +780,25 @@ window.onmessage = ev => {
           ' component set' + (si.violations === 1 ? '' : 's') + ' violate' + (si.violations === 1 ? 's' : '') +
           ' set invariants</div>' +
           '<div style="font-size:10px;color:#78350f;line-height:1.5;font-family:ui-monospace,Menlo,monospace">' + siLines + '</div>' +
-          '<div style="font-size:10px;color:#b45309;margin-top:6px">A state must not resize its component, and every state must look different from default. Informational — nothing was blocked.</div>';
+          '<div style="font-size:10px;color:#b45309;margin-top:6px">A state must not resize its component, and every state must look different from default. Informational — nothing was blocked.' +
+          (siSkipTxt ? '<br>' + siSkipTxt + ' — those were not examined at all.' : '') + '</div>';
       } else {
         siWrap.style.cssText = 'padding:6px 12px;margin-top:6px;';
+        // Three distinct sentences, because they are three distinct
+        // outcomes. "0 sets checked, clean" would be a lie by arithmetic.
+        var siMsg;
+        if (si.setsChecked === 0) {
+          siMsg = 'Set invariants: nothing was checked — ' + siSkipTxt + '.';
+        } else if (siSkipped > 0) {
+          siMsg = 'Set invariants: ' + si.setsChecked +
+            ' set' + (si.setsChecked === 1 ? '' : 's') + ' checked, clean. ' +
+            siSkipTxt + ' — not examined.';
+        } else {
+          siMsg = 'Set invariants: ' + si.setsChecked +
+            ' set' + (si.setsChecked === 1 ? '' : 's') + ' checked, clean.';
+        }
         siWrap.innerHTML =
-          '<div style="font-size:10px;color:#64748b">Set invariants: ' + si.setsChecked +
-          ' set' + (si.setsChecked === 1 ? '' : 's') + ' checked, clean.</div>';
+          '<div style="font-size:10px;color:#64748b">' + siMsg + '</div>';
       }
       $('done-stats').appendChild(siWrap);
     }
