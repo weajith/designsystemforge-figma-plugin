@@ -156,6 +156,12 @@ body{background:#fff;width:100%;min-height:580px;overflow-x:hidden;overflow-y:au
   <div class="tab" data-tab="import">Import</div>
 </div>
 
+<!--  Saved-token notice. Sits ABOVE the tab bodies on purpose: the token is
+      shared by all five tabs, so a notice living inside one of them would be
+      invisible to a user who opens on another. Populated only by the
+      'restore-token' message; hidden the rest of the time. -->
+<div id="token-notice" class="alert alert-warn" style="display:none;margin:12px 14px 0"></div>
+
 <!-- ═══════════════════════════════════════ BUILD ══════════════════════════════ -->
 <div class="body">
 <div id="screen-build" class="screen active">
@@ -238,15 +244,14 @@ body{background:#fff;width:100%;min-height:580px;overflow-x:hidden;overflow-y:au
       <input id="scan-token" class="input" type="text" placeholder="dsb_xxxxxxxxxxxxxxxx" autocomplete="off" spellcheck="false">
     </div>
     
-    <div class="input-group">
-      <label class="input-label">File role</label>
-      <select class="select" id="scan-role">
-        <option value="MIXED">Mixed (colours + components)</option>
-        <option value="FOUNDATIONS">Foundations only (colours, spacing, typography)</option>
-        <option value="COMPONENTS">Components only</option>
-      </select>
-    </div>
-    
+    <!--  The "File role" select (Mixed / Foundations only / Components only)
+          was removed here. It was never wired: code.ts posts
+          `fileRole: 'MIXED' as const` for every scan and never reads the
+          value the UI sent, so all three options produced the same scan.
+          Asking a question and discarding the answer is worse than not
+          asking. Wiring it for real would change what the scan sends and
+          what the ingest diffs — a payload change, deliberately out of
+          scope (Import-Flow Friction §3.3 B2 / I6). -->
     <button class="btn btn-primary" id="btn-scan">⟳ Scan this file</button>
   </div>
 
@@ -360,23 +365,35 @@ body{background:#fff;width:100%;min-height:580px;overflow-x:hidden;overflow-y:au
   <!-- How it works explainer -->
   <div class="card" style="margin-bottom:12px;background:#F0FDF4;border-color:#BBF7D0">
     <div class="card-title" style="color:#166534">How Figma → designsystem.build works</div>
+    <!--  This describes the ONE Figma door. Before it, the import page created
+          a blank project and sent you to an Export tab for a token; the
+          explainer said "export token + project ID" and "Paste both below"
+          while this panel has had exactly one field and no project-id field
+          in any tab — getInputs() sends projectId:'' because the server
+          derives it from the token. Both sentences named a step and a field
+          that do not exist. -->
     <div style="font-size:11px;color:#166534;line-height:1.6;margin-top:4px">
-      <div style="margin-bottom:4px"><strong>Step 1</strong> — Create a project on designsystem.build first</div>
-      <div style="margin-bottom:4px"><strong>Step 2</strong> — Go to that project's Export tab and click <em>Export to Figma</em> to get your export token + project ID</div>
-      <div style="margin-bottom:4px"><strong>Step 3</strong> — Paste both below and click Import</div>
-      <div>Your Figma file's variables, styles, and components will be mapped into the project.</div>
+      <div style="margin-bottom:4px"><strong>Step 1</strong> — On designsystem.build choose <em>Import</em>, then <em>From Figma</em>. It creates the project and shows you an import token.</div>
+      <div style="margin-bottom:4px"><strong>Step 2</strong> — Copy that token and paste it below.</div>
+      <div style="margin-bottom:4px"><strong>Step 3</strong> — Click <em>⟳ Scan &amp; import →</em>. Your file's variables, text styles and components are read into that project — no second project is made.</div>
+      <div>Nothing is changed until you accept it on designsystem.build.</div>
     </div>
     <a href="https://design-system.up.railway.app/dashboard" target="_blank"
       style="display:inline-flex;align-items:center;gap:6px;margin-top:10px;font-size:11px;font-weight:600;color:#166534;background:#BBF7D040;border:1px solid #86EFAC;border-radius:7px;padding:5px 10px;text-decoration:none">
-      ↗ Create a project first →
+      ↗ Start an import on designsystem.build →
     </a>
   </div>
 
   <div id="import-setup">
     <div class="input-group">
-      <label class="input-label">Export token</label>
+      <!--  Called "Import token" here because that is what the page which
+            issues it calls it ("Your import token"). The same credential is
+            the export token on the other four tabs, which is where it is
+            issued from the Export tab. One field: there is no project id to
+            paste, and there never was one to paste it into. -->
+      <label class="input-label">Import token</label>
       <input id="import-token" class="input" type="text" placeholder="dsb_xxxxxxxxxxxxxxxx" autocomplete="off" spellcheck="false">
-      <div class="input-hint">From your project's Export tab on designsystem.build</div>
+      <div class="input-hint">The token designsystem.build showed you when it created the project</div>
     </div>
     
     
@@ -988,12 +1005,23 @@ window.onmessage = ev => {
     // Non-fatal — silently ignore in production
   }
 
-  // ── restore-token (save token for next session) ───────────────────────────
+  // ── restore-token (the saved token, after it has been checked) ────────────
+  //
+  //  `prefill` is the decision, not `token`. code.ts probes the stored token
+  //  against /export/resolve-token before sending this message: a token the
+  //  API rejects arrives with prefill:false and a notice, and must NOT reach
+  //  the five fields. Reading msg.token alone — the old behaviour — is what
+  //  offered superseded tokens silently.
   if (msg.type === 'restore-token') {
-    if (msg.token) {
+    if (msg.prefill && msg.token) {
       ['build','scan','diff','patch','import'].forEach(tab => {
         const el = $(tab + '-token'); if (el && !el.value) el.value = msg.token;
       });
+    }
+    const notice = $('token-notice');
+    if (notice) {
+      notice.textContent = msg.notice || '';
+      notice.style.display = msg.notice ? 'block' : 'none';
     }
   }
 };
@@ -1100,10 +1128,9 @@ $('btn-build-retry')?.addEventListener('click', () => {
 $('btn-scan')?.addEventListener('click', () => {
   const { token, projectId, apiBase } = getInputs('scan');
   if (!token) { alert('Enter your export token'); return; }
-  const fileRole = $('scan-role')?.value || 'MIXED';
   hide('scan-setup');
   show('scan-progress');
-  parent.postMessage({ pluginMessage: { type: 'scan', token, projectId, apiBase, fileRole } }, '*');
+  parent.postMessage({ pluginMessage: { type: 'scan', token, projectId, apiBase } }, '*');
 });
 
 $('btn-scan-again')?.addEventListener('click', () => {
@@ -1151,7 +1178,10 @@ $('btn-patch-again')?.addEventListener('click', () => {
 // IMPORT
 $('btn-import')?.addEventListener('click', () => {
   const { token, projectId, apiBase } = getInputs('import');
-  if (!token) { alert('Enter your export token'); return; }
+  //  "import token" — the label above this field, and what the page that
+  //  issues it calls it. The other four tabs say "export token" because that
+  //  is where theirs comes from.
+  if (!token) { alert('Enter your import token'); return; }
   parent.postMessage({ pluginMessage: { type: 'import-to-website', token, projectId, apiBase } }, '*');
 });
 $('btn-import-again')?.addEventListener('click', () => {
