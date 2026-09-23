@@ -547,14 +547,49 @@ window.onmessage = ev => {
       s.className = 'step done';
       s.querySelector('.step-icon').textContent = '';
     });
-    $('done-summary').textContent = `Built ${msg.systemName || 'your design system'} in Figma. ${msg.variables || 0} variables · ${msg.components || 0} components across ${msg.pages || 0} pages.`;
+    //  DELIVERED vs REQUESTED. msg.components is now what was drawn, and
+    //  msg.componentsRequested what the payload asked for. When they differ
+    //  the headline says so first — a truncated build used to print the
+    //  same sentence as a complete one.
+    const requested = (typeof msg.componentsRequested === 'number') ? msg.componentsRequested : (msg.components || 0);
+    const shortBy = requested - (msg.components || 0);
+    $('done-summary').textContent = shortBy > 0
+      ? `Built ${msg.components || 0} of ${requested} components for ${msg.systemName || 'your design system'} — ${shortBy} not built. ${msg.variables || 0} variables across ${msg.pages || 0} pages.`
+      : `Built ${msg.systemName || 'your design system'} in Figma. ${msg.variables || 0} variables · ${msg.components || 0} components across ${msg.pages || 0} pages.`;
     const stats = $('done-stats');
     const scoreColor = !msg.healthScore ? '#64748b' : msg.healthScore >= 80 ? '#16a34a' : msg.healthScore >= 60 ? '#d97706' : '#dc2626';
     const scoreLabel = !msg.healthScore ? '—' : msg.healthScore >= 80 ? 'Excellent' : msg.healthScore >= 60 ? 'Good' : 'Needs work';
     stats.innerHTML = `
       <div class="stat"><div class="stat-val">${msg.variables||0}</div><div class="stat-lbl">Variables</div></div>
-      <div class="stat"><div class="stat-val">${msg.components||0}</div><div class="stat-lbl">Components</div></div>
+      <div class="stat"><div class="stat-val">${shortBy > 0 ? (msg.components||0) + '/' + requested : (msg.components||0)}</div><div class="stat-lbl">Components</div></div>
       <div class="stat"><div class="stat-val">${msg.pages||0}</div><div class="stat-lbl">Pages</div></div>`;
+
+    // ── What did NOT get built, by name ───────────────────────────────────
+    //
+    //  A partial delivery with a named list is honest; a silent 45-of-78 is
+    //  not (2026-09-23, file jEdU2Vdut8Pjqcw4donmaW). This block prints the
+    //  component the run stopped on, then every component that threw.
+    if (msg.stoppedAt || (msg.componentsFailed && msg.componentsFailed.length) || shortBy > 0) {
+      const wrap = document.createElement('div');
+      wrap.style.cssText = 'padding:10px 12px;border-radius:8px;background:#fef2f2;border:1px solid #fecaca;margin-top:12px;';
+      let html = '<div style="font-size:12px;font-weight:600;color:#991b1b">This build is incomplete</div>';
+      if (msg.stoppedAt) {
+        html += '<div style="font-size:11px;color:#7f1d1d;margin-top:4px">The run stopped while building <b>' +
+          String(msg.stoppedAt).replace(/[<&]/g, '') + '</b>. Its page carries a note saying so.</div>';
+      }
+      const failed = msg.componentsFailed || [];
+      if (failed.length) {
+        html += '<div style="font-size:11px;color:#7f1d1d;margin-top:6px">' + failed.length + ' component(s) failed:</div>' +
+          '<ul style="margin:4px 0 0 16px;padding:0;font-size:10px;color:#7f1d1d">' +
+          failed.slice(0, 20).map(f =>
+            '<li><b>' + String(f.name || f.componentId).replace(/[<&]/g, '') + '</b>: ' +
+            String(f.message || '').replace(/[<&]/g, '') + '</li>').join('') +
+          '</ul>';
+      }
+      html += '<div style="font-size:10px;color:#7f1d1d;margin-top:6px">Run the build again — it rebuilds every component and keeps the ones that already worked.</div>';
+      wrap.innerHTML = html;
+      stats.appendChild(wrap);
+    }
 
     // ── PR47: text-style auto-apply count ─────────────────────────────────
     // PR46 added a post-build sweep that walks every TEXT node and applies
@@ -998,6 +1033,20 @@ window.onmessage = ev => {
   if (msg.type === 'push-error') {
     show('scan-done');
     const el = $('scan-result-text'); if (el) el.textContent = 'Push failed: ' + msg.message;
+  }
+
+  // ── The previous run never finished ───────────────────────────────────────
+  //
+  //  Posted at the start of a build, read from the document. A killed
+  //  plugin cannot tell anyone anything; the next run can.
+  if (msg.type === 'previous-run-incomplete') {
+    const el = document.createElement('div');
+    el.style.cssText = 'color:#B45309;font-size:11px;margin-top:4px;';
+    el.textContent = '⚠ The previous build did not finish' +
+      (msg.component ? ' — it stopped at ' + msg.component : '') +
+      (typeof msg.built === 'number' && typeof msg.total === 'number' ? ' (' + msg.built + ' of ' + msg.total + ' built)' : '') + '.';
+    const steps = $('build-steps');
+    if (steps) steps.appendChild(el);
   }
 
   // ── Component error (non-fatal — shown inline during build) ───────────────
