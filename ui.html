@@ -698,6 +698,15 @@ window.onmessage = ev => {
       if (d.specRendered && d.specRendered.length) {
         head = 'Rendered from spec: ' + d.specRendered.join(', ');
         body = 'The authored spec drove these components, not a hand-written handler.';
+        //  FC-1.3. This bundle can draw a variant's own appearance; whether it
+        //  DID depends on the API sending a spec that declares variants. Zero
+        //  renders exactly as before, which is safe and looks identical to the
+        //  fix not working — so the count is printed rather than inferred.
+        body += '<div style="margin-top:4px">Specs carrying a variant axis: '
+             + (d.specsWithVariants || 0) + ' of ' + (d.specsInPayload || 0)
+             + ((d.specsWithVariants ? '' : ' — every variant row draws the default appearance; '
+                + 'the API has not sent variant-carrying specs yet.'))
+             + '</div>';
         bg = '#f0fdf4'; bd = '#bbf7d0'; fg = '#166534';
       } else if (!d.specsInPayload) {
         head = 'API is behind — no specs in this payload';
